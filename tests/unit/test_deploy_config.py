@@ -54,5 +54,7 @@ def test_deployment_workflow_fails_closed_and_runs_tests_before_aws_auth() -> No
     assert "EC2_HOST_FINGERPRINT" in workflow
     assert "fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}" in workflow
     assert "pip-audit --progress-spinner off" in workflow
+    assert "if: ${{ secrets.POSTGRES_PASSWORD != '' && secrets.RTML_API_KEY != ''" in workflow
+    assert "secrets.EC2_HOST_FINGERPRINT != ''" in workflow
     assert workflow.index("Test before deployment") < workflow.index("Configure AWS credentials")
     assert "${ECR_REPOSITORY_API}:latest" not in workflow

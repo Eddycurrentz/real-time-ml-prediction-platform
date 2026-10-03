@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ secrets.POSTGRES_PASSWORD != '' && secrets.RTML_API_KEY != '' && secrets.EC2_HOST != '' && secrets.EC2_HOST_FINGERPRINT != '' && secrets.EC2_SSH_KEY != '' && secrets.AWS_ROLE_TO_ASSUME != '' }}
     runs-on: ubuntu-latest
     environment: production
     env:
@@ -42,6 +43,7 @@ jobs:
           python -m build
 
       - name: Validate deployment secrets
+        if: ${{ secrets.POSTGRES_PASSWORD != '' && secrets.RTML_API_KEY != '' && secrets.EC2_HOST_FINGERPRINT != '' }}
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           RTML_API_KEY: ${{ secrets.RTML_API_KEY }}
