@@ -1,0 +1,7 @@
+transaction_id,timestamp,customer_id,amount,merchant_category,transaction_type,payment_method,customer_age,account_age_days,transaction_count_24h,average_transaction_amount,location,device_type,previous_failed_transactions,is_anomaly
+550e8400-e29b-41d4-a716-446655440000,2025-01-01T08:00:00Z,customer-00001,24.5,grocery,purchase,card,34,1200,0,,US-NY,mobile,0,false
+550e8400-e29b-41d4-a716-446655440001,2025-01-01T12:15:00Z,customer-00001,31.2,dining,purchase,wallet,34,1200,1,24.5,US-NY,mobile,0,false
+550e8400-e29b-41d4-a716-446655440002,2025-01-01T12:15:45Z,customer-00001,412.0,electronics,purchase,card,34,1200,2,27.85,US-CA,desktop,0,true
+550e8400-e29b-41d4-a716-446655440003,2025-01-02T03:20:00Z,customer-00001,1.25,other,purchase,card,34,1200,0,156.5666666667,US-CA,desktop,0,true
+550e8400-e29b-41d4-a716-446655440004,2025-01-02T14:00:00Z,customer-00002,67.8,utilities,transfer,bank_transfer,,730,0,,GB-LON,mobile,0,false
+550e8400-e29b-41d4-a716-446655440005,2025-01-03T09:35:00Z,customer-00002,89.1,travel,purchase,card,51,730,1,67.8,GB-LON,pos,0,false

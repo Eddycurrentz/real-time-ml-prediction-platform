@@ -1,0 +1,6 @@
+- Built a Python transaction-anomaly baseline with deterministic synthetic data generation, a FastAPI scoring contract, and tested local feature/training pipelines.
+- Implemented point-in-time customer features, preserved event-to-label row alignment, and fit imputation only on chronological training data.
+- Added generator drift scenarios and schema/distribution tests; the recorded Python 3.11 suite passes 32 tests with 89% coverage.
+- Added Docker Compose and AWS deployment scaffolding plus a CI workflow for lint, unit tests with coverage, and package builds; live deployment is not claimed.
+- Instrumented basic API request, latency, error, and prediction metrics, and implemented deterministic customer-to-arm assignment; model-backed A/B evaluation remains future work.
+- Added producer/consumer contract tests and an in-memory registry abstraction; Kafka/Postgres persistence and MLflow-backed model serving are not implemented.

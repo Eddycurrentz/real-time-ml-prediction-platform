@@ -1,0 +1,258 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPOSITORY_API: rtml-api
+      ECR_REPOSITORY_CONSUMER: rtml-consumer
+      EC2_USER: ${{ secrets.EC2_USER || 'ec2-user' }}
+      EC2_HOST: ${{ secrets.EC2_HOST }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Test before deployment
+        run: |
+          python -m pip install -e '.[dev]'
+          ruff check .
+          pip-audit --progress-spinner off
+          pytest tests/unit -q --cov=rtml --cov-report=term
+          python -m build
+
+      - name: Validate deployment secrets
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          RTML_API_KEY: ${{ secrets.RTML_API_KEY }}
+          EC2_HOST_FINGERPRINT: ${{ secrets.EC2_HOST_FINGERPRINT }}
+        run: |
+          if [ -z "$EC2_HOST_FINGERPRINT" ]; then
+            echo "EC2_HOST_FINGERPRINT must be configured"
+            exit 1
+          fi
+          for secret_name in POSTGRES_PASSWORD RTML_API_KEY; do
+            secret_value="${!secret_name}"
+            if [[ ${#secret_value} -lt 32 || ! "$secret_value" =~ ^[A-Za-z0-9_-]+$ ]]; then
+              echo "$secret_name must be at least 32 URL-safe characters"
+              exit 1
+            fi
+          done
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Authenticate to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tags
+        run: |
+          echo "ECR_REGISTRY=${{ steps.ecr.outputs.registry }}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Build and push API image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG" \
+            -f infrastructure/docker/api.Dockerfile \
+            .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY_API:$IMAGE_TAG"
+
+      - name: Build and push consumer image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY_CONSUMER:$IMAGE_TAG" \
+            -f infrastructure/docker/streaming.Dockerfile \
+            .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY_CONSUMER:$IMAGE_TAG"
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          RTML_API_KEY: ${{ secrets.RTML_API_KEY }}
+        with:
+          envs: POSTGRES_PASSWORD,RTML_API_KEY
+          host: ${{ env.EC2_HOST }}
+          fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
+          username: ${{ env.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            umask 077
+            mkdir -p /opt/rtml
+            cd /opt/rtml
+
+            if [ -f docker-compose.yml ]; then
+              cp docker-compose.yml docker-compose.yml.bak
+            fi
+
+            cat > docker-compose.yml <<EOF
+            services:
+              postgres:
+                image: postgres:16-alpine
+                container_name: rtml-postgres
+                environment:
+                  POSTGRES_DB: rtml
+                  POSTGRES_USER: rtml
+                  POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+                ports:
+                  - "127.0.0.1:5432:5432"
+                volumes:
+                  - postgres_data:/var/lib/postgresql/data
+                  - ./sql:/docker-entrypoint-initdb.d:ro
+                networks:
+                  - rtml
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U rtml -d rtml"]
+                  interval: 5s
+                  timeout: 5s
+                  retries: 10
+
+              kafka:
+                image: bitnami/kafka:3.7
+                container_name: rtml-kafka
+                ports:
+                  - "127.0.0.1:9092:9092"
+                environment:
+                  KAFKA_CFG_NODE_ID: 1
+                  KAFKA_CFG_PROCESS_ROLES: controller,broker
+                  KAFKA_CFG_LISTENERS: INTERNAL://:9094,EXTERNAL://:9092,CONTROLLER://:9093
+                  KAFKA_CFG_ADVERTISED_LISTENERS: INTERNAL://kafka:9094,EXTERNAL://localhost:9092
+                  KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+                  KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
+                  KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+                  KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+                  KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+                  KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+                  KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+                  KAFKA_CFG_NUM_PARTITIONS: 3
+                  KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+                  ALLOW_PLAINTEXT_LISTENER: "yes"
+                networks:
+                  - rtml
+                healthcheck:
+                  test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+                  interval: 10s
+                  timeout: 10s
+                  retries: 20
+
+              api:
+                image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_API }}:${{ env.IMAGE_TAG }}
+                container_name: rtml-api
+                ports:
+                  - "127.0.0.1:8000:8000"
+                environment:
+                  APP_ENV: prod
+                  LOG_LEVEL: INFO
+                  RTML_API_KEY: $RTML_API_KEY
+                  DATABASE_URL: postgresql://rtml:$POSTGRES_PASSWORD@postgres:5432/rtml
+                  KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+                depends_on:
+                  postgres:
+                    condition: service_healthy
+                  kafka:
+                    condition: service_healthy
+                networks:
+                  - rtml
+                read_only: true
+                tmpfs:
+                  - /tmp:rw,noexec,nosuid,size=16m
+                cap_drop:
+                  - ALL
+                security_opt:
+                  - no-new-privileges:true
+                pids_limit: 128
+                mem_limit: 512m
+                healthcheck:
+                  test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()\" >/dev/null 2>&1 || exit 1"]
+                  interval: 10s
+                  timeout: 10s
+                  retries: 20
+
+              consumer:
+                image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_CONSUMER }}:${{ env.IMAGE_TAG }}
+                container_name: rtml-consumer
+                command: ["python", "-m", "rtml.streaming.consumer"]
+                environment:
+                  APP_ENV: prod
+                  DATABASE_URL: postgresql://rtml:$POSTGRES_PASSWORD@postgres:5432/rtml
+                  KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+                depends_on:
+                  postgres:
+                    condition: service_healthy
+                  kafka:
+                    condition: service_healthy
+                networks:
+                  - rtml
+                read_only: true
+                tmpfs:
+                  - /tmp:rw,noexec,nosuid,size=16m
+                cap_drop:
+                  - ALL
+                security_opt:
+                  - no-new-privileges:true
+                pids_limit: 128
+                mem_limit: 512m
+
+            volumes:
+              postgres_data:
+            networks:
+              rtml:
+                internal: true
+            EOF
+
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+            PREVIOUS_API_IMAGE=$(docker inspect --format='{{index .Config.Image}}' rtml-api 2>/dev/null || echo "rtml-api:local")
+            PREVIOUS_CONSUMER_IMAGE=$(docker inspect --format='{{index .Config.Image}}' rtml-consumer 2>/dev/null || echo "rtml-consumer:local")
+            printf '%s\n%s\n' "$PREVIOUS_API_IMAGE" "$PREVIOUS_CONSUMER_IMAGE" > /opt/rtml/.previous-images
+
+            docker compose pull
+            docker compose up -d --remove-orphans
+            curl --fail --silent http://localhost:8000/ready
+
+      - name: Roll back deployment if health check fails
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.EC2_HOST }}
+          fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
+          username: ${{ env.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/rtml
+            if [ -f .previous-images ]; then
+              mapfile -t PREVIOUS < .previous-images
+              export API_IMAGE="${PREVIOUS[0]}"
+              export CONSUMER_IMAGE="${PREVIOUS[1]}"
+              docker compose up -d --force-recreate
+              curl --fail --silent http://localhost:8000/ready || true
+            else
+              docker compose down || true
+            fi
