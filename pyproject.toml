@@ -23,7 +23,7 @@ dependencies = [
 pipeline = [
     "numpy>=1.26,<3",
     "pandas>=2.1,<3",
-    "pyarrow>=23.0.1,<24",
+    "pyarrow>=23.0.1,<26",
     "scikit-learn>=1.4,<2",
 ]
 streaming = [
