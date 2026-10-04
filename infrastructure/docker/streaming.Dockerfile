@@ -9,7 +9,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
 
-RUN python -m pip install --upgrade pip && python -m pip install -e .
+RUN python -m pip install --upgrade pip && python -m pip install -e '.[streaming]'
 
 RUN useradd --create-home --uid 10001 app
 USER 10001:10001
