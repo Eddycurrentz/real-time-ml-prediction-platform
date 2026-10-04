@@ -12,10 +12,12 @@ Thanks for helping improve the project.
 ## Local validation
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,pipeline,streaming]"
 pytest tests/unit -q
 ruff check .
 ```
+
+The base install is the API runtime only; the `pipeline` and `streaming` extras add the offline (`numpy`, `pandas`, `pyarrow`, `scikit-learn`) and Kafka/Postgres (`confluent-kafka`, `psycopg`) dependencies that the test suite needs.
 
 ## Coding standards
 

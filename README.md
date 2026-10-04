@@ -76,9 +76,11 @@ The project metadata reflects the supported compatibility window. The recorded v
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,pipeline,streaming]"
 pytest tests/unit -q
 ```
+
+The base install contains only what the serving API imports (`fastapi`, `pydantic`, `prometheus-client`, `structlog`, `uvicorn`). The `pipeline` extra adds the offline stack (`numpy`, `pandas`, `pyarrow`, `scikit-learn`) and the `streaming` extra adds the Kafka and Postgres clients (`confluent-kafka`, `psycopg`); installing both, as above, gives you every dependency the test suite and the local workflows need.
 
 Compose configuration is checked in, but the Docker Desktop engine must be running to build or start containers. The consumer entry point is currently a stub; starting Compose does not verify a complete streaming pipeline.
 
@@ -164,13 +166,24 @@ The API does not yet load a model from the registry; it currently reports a loca
 
 ## 12. Deployment
 
-The repository includes local Compose support and AWS deployment scaffolding:
+The repository includes local Compose support, AWS deployment scaffolding, and a serverless FastAPI target:
 
 - [docker-compose.yml](docker-compose.yml)
 - [docs/aws_deployment.md](docs/aws_deployment.md)
 - [infrastructure/scripts/deploy.sh](infrastructure/scripts/deploy.sh)
 - [infrastructure/scripts/rollback.sh](infrastructure/scripts/rollback.sh)
 - [infrastructure/scripts/cleanup.sh](infrastructure/scripts/cleanup.sh)
+
+### Vercel (serverless FastAPI)
+
+The API also deploys to Vercel as a single FastAPI function, without a model or database dependency:
+
+- `pyproject.toml` declares `[tool.vercel] entrypoint = "src.rtml.api:app"`, because Vercel's default entrypoint search does not reach `app.py` inside this project's `src/` layout.
+- Vercel installs the base dependencies only and never the `pipeline` or `streaming` extras, and Python bundles are not tree-shaken, so the offline and Kafka/Postgres packages stay out of the function bundle.
+- Set `RTML_API_KEY` as a project environment variable (32 or more random URL-safe characters). Without it `/ready` returns 503 and the protected routes fail closed; `/health`, `/` and `/docs` stay open.
+- The dashboard is served at `/` and calls the same-origin API routes, so the deployment URL shows the Risk Desk as soon as the API key is entered there.
+
+The function is stateless: it does not connect to PostgreSQL or Kafka, and scoring uses the placeholder scorer described in section 11.
 
 ## 13. CI and validation
 

@@ -8,7 +8,7 @@ Format: context, target design decision, alternatives considered, consequences. 
 **Context:** Features, schemas and config are shared by ETL, training, consumer and API.
 **Decision:** One package installed with `pip install -e .`; services are entry points/modules.
 **Alternatives:** Separate top-level folders as in the master prompt (needs path hacks or duplicated code); a monorepo of independently published packages (overkill).
-**Consequences:** One source of truth for features. Docker images install only the extras they need (`api`, `etl`, `training`).
+**Consequences:** One source of truth for features. The base install is the serving API's runtime set, while the offline numerical stack and the Kafka/Postgres clients are the `pipeline` and `streaming` extras (D21), so each image, workflow and serverless bundle installs only what it runs.
 
 ## D2. Stateless API; enrichment in the consumer
 **Context:** Some features need per-customer history.
@@ -90,3 +90,9 @@ Format: context, target design decision, alternatives considered, consequences. 
 
 ## D20. Development environment assumption (resolves Q5)
 **Decision:** 16 GB RAM, Docker Desktop, CPU only. Spark runs on demand with limited memory; PyTorch uses CPU wheels.
+
+## D21. Serverless entrypoint and base-dependency split (Vercel)
+**Context:** The API is also deployed as a single FastAPI function on Vercel. Vercel's Python builder has no default entrypoint for this project's `src/` layout, it installs only `[project.dependencies]` (extras are skipped), and it bundles every reachable file into one function with a 500 MB uncompressed limit and no tree-shaking.
+**Decision:** Declare `[tool.vercel] entrypoint = "src.rtml.api:app"`, and keep the serving API's runtime set (`fastapi`, `pydantic`, `prometheus-client`, `structlog`, `uvicorn`) as the base dependencies while the offline stack and the Kafka/Postgres clients move to `pipeline` and `streaming` extras.
+**Alternatives:** Leave every dependency in `[project.dependencies]` (the unused `numpy`, `pandas`, `pyarrow`, `scikit-learn`, `confluent-kafka` and `psycopg` install measured about 357 MB against the 500 MB limit, and the serving API never imports them); add a root `requirements.txt` (Vercel's manifest loader prefers `pyproject.toml` when both exist, so it would be ignored); serve the API only from a long-lived container (already the AWS path, but it does not give a preview deployment per commit).
+**Consequences:** CI and the deploy workflow install `.[dev,pipeline,streaming]`; the streaming image installs `.[streaming]`; the API image and the Vercel function install the base only. The entrypoint was verified by loading `src.rtml.api:app` and exercising `/health`, `/`, `/assets/styles.css`, `/ready`, `/predict` (with and without a key) and `/metrics` against a base-only environment.
