@@ -93,7 +93,7 @@ jobs:
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY_CONSUMER:$IMAGE_TAG"
 
       - name: Deploy to EC2
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           RTML_API_KEY: ${{ secrets.RTML_API_KEY }}
@@ -240,7 +240,7 @@ jobs:
 
       - name: Roll back deployment if health check fails
         if: failure()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ env.EC2_HOST }}
           fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
